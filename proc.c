@@ -6,6 +6,8 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "rand.h"
+
 
 struct {
   struct spinlock lock;
@@ -19,6 +21,10 @@ extern void forkret(void);
 extern void trapret(void);
 
 static void wakeup1(void *chan);
+int isCountingStarted=0;
+int quanta=-1;
+int schedSeq[100];
+int QUANTA_NUM=100;
 
 void
 pinit(void)
@@ -88,6 +94,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->tickets = 10;																//lottery
 
   release(&ptable.lock);
 
@@ -231,6 +238,35 @@ exit(void)
   struct proc *p;
   int fd;
 
+  
+  //lottery
+  /*-------The following code is added to format the output--------*/
+  /* NOTE that you need to replace sched_times in the cprintf with whatever you use to record the execution time */
+  static char *states[] = {
+  [UNUSED]    "unused",
+  [EMBRYO]    "embryo",
+  [SLEEPING]  "sleep ",
+  [RUNNABLE]  "runble",
+  [RUNNING]   "run   ",
+  [ZOMBIE]    "zombie"
+  };
+  char *state;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == UNUSED)
+      continue;
+    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      state = states[p->state];
+    else
+      state = "???";
+    
+	cprintf("From  %s-%d: %d %s %s sched_times=%d ticket=%d \n", myproc()->name, myproc()->pid, p->pid, state, p->name, p->usage, p->tickets);
+    //cprintf("From  %s-%d: %d %s %s tickets=%d #timeSlices=%d \n", myproc()->name, myproc()->pid, p->pid, state, p->name, p->tickets, myproc()->usage);
+  }
+  /*------------------patch end------------------------ */
+  
+  
+  
+  
   if(curproc == initproc)
     panic("init exiting");
 
@@ -311,6 +347,29 @@ wait(void)
   }
 }
 
+
+
+
+//lottery
+int lottery_Total(void){
+  struct proc *p;
+  int ticket_aggregate=0;
+
+//loop over process table and increment total tickets if a runnable process is found 
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state==RUNNABLE){
+      ticket_aggregate+=p->tickets;
+    }
+  }
+  return ticket_aggregate;          // returning total number of tickets for runnable processes
+}
+
+
+
+
+
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -319,12 +378,19 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+//author: Devansh Sheth
+//Lottery Scheduler
 void
 scheduler(void)
 {
   struct proc *p;
+  //struct proc *current;
   struct cpu *c = mycpu();
   c->proc = 0;
+  int count = 0;								//lottery
+  long golden_ticket = 0;						//lottery
+  int total_no_tickets = 0;						//lottery
+  
   
   for(;;){
     // Enable interrupts on this processor.
@@ -332,24 +398,100 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+
+	//lottery
+    //resetting the variables to make scheduler start from the beginning of the process queue
+    golden_ticket = 0;
+    count = 0;
+    total_no_tickets = 0;
+	
+    
+    //calculate Total number of tickets for runnable processes  
+    total_no_tickets = lottery_Total();
+    
+    //pick a random ticket from total available tickets
+    golden_ticket = random_at_most(total_no_tickets);
+	
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		
       if(p->state != RUNNABLE)
         continue;
+		
+		//lottery	
+	     //find the process which holds the lottery winning ticket 
+      if ((count + p->tickets) < golden_ticket){
+        count += p->tickets;
+		
+        continue;
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       c->proc = p;
       switchuvm(p);
-      p->state = RUNNING;
+      //current = p;
+	//------------patch start: for visualization---------------------------
+/*
+	if (isCountingStarted==0 && p->tickets >= 10)
+        {
+          quanta=0;
+          isCountingStarted=1;
+        }
+        if (isCountingStarted == 1)
+        {
+          schedSeq[quanta] = current->pid;
+          quanta++;
+        }
+        if(quanta == QUANTA_NUM)
+        {
+          int a = schedSeq[0];
+          int b = schedSeq[1];
+          int c = schedSeq[2];
+          int counter1=0, counter2=0, counter3=0;
+          for (int i=0; i<QUANTA_NUM; i++)
+          {
+            if (schedSeq[i]==a)
+            {
+              counter1++;
+              cprintf("(%d,%d);",i,counter1);
+            }
+          }
+          cprintf("\n");
+          for (int i=0; i<QUANTA_NUM; i++)
+          {
+            if (schedSeq[i]==b)
+            {
+              counter2++;
+              cprintf("(%d,%d);",i,counter2);
+            }
+          }
+          cprintf("\n");
+          for (int i=0; i<QUANTA_NUM; i++)
+          {
+            if (schedSeq[i]==c)
+            { 
+              counter3++;
+              cprintf("(%d,%d);",i,counter3);
+            }
+          }
+          cprintf("\n");
+        }
+*/
+//------------patch end: for visualization---------------------------
 
+      p->state = RUNNING;
+	  //p->totalTickets=total_no_tickets;
+	  p->usage=p->usage+1;
       swtch(&(c->scheduler), p->context);
       switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
+	  break;															//lottery
     }
+	
     release(&ptable.lock);
 
   }
@@ -523,7 +665,8 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    //cprintf("%d %s %s", p->pid, state, p->name);
+	cprintf("%d %s %sc%d", p->pid, state, p->name, p->tickets);					//lottery
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -532,3 +675,34 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+
+// @author: Pranshu Shrivastava
+int
+procCount(void)
+{
+	
+	 
+  
+  struct proc *p;
+  
+  int count;
+  count=0;
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    
+    if(p->state == UNUSED)
+	{continue;}
+    else{
+    count++;
+    }
+    }
+    
+  
+ 
+  return count;
+}
+
+
+
+

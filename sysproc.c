@@ -89,3 +89,65 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+unsigned long numcalls = 0;
+
+int
+sys_info(void)
+{
+    //procdump();
+	int x;
+	int num;
+	argptr(0, (void *)&num, sizeof(num));
+	
+	if (num==1)
+	{
+	x = procCount();
+	cprintf("Count of processes in the system: %d\n", x);
+	
+	}
+	else if (num==2)
+	{
+		cprintf("Count of the total number of system calls that the current process has made so far: %d\n", numcalls);
+		
+	}
+	else if (num==3)
+	{
+		int memory=myproc()->sz;
+		int mem1=memory/4096;
+		cprintf("Number of memory pages the current process is using: %d\n", mem1);
+		
+	}
+	else
+	{
+		cprintf("Enter input 1,2 or 3");
+	}
+	
+	return -1;
+	
+}
+
+
+
+
+
+
+//lottery
+//function to set the tickets for the lottery test
+int
+sys_settickets(void){
+  int ticket_number;
+  if (argint(0, &ticket_number) < 0)
+  {
+     myproc()->tickets = 10; 	//setting the default value
+  }
+  else{
+     myproc()->tickets = ticket_number;
+  }
+  return 0;
+}
+
+
+
+
+
